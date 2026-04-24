@@ -21,7 +21,8 @@ from telegram.ext import (
 BOT_TOKEN = "8442673427:AAEj15lEhVaxBFHUBw_EUYdJEV_-99_e6p4"
 ADMIN_IDS = {5037478748, 6991875}
 
-DB_PATH = Path("kto_ya.sqlite3")
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = BASE_DIR / "kto_ya.sqlite3"
 TRIGGERS = {"кто я", "кто", "я"}
 
 ROLE_COOLDOWN_SECONDS = 10 * 60
@@ -88,6 +89,8 @@ def columns(conn, table: str) -> set[str]:
 
 
 def init_db():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
     with db() as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         conn.execute(
@@ -492,11 +495,15 @@ async def send_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     last_role = row[6]
-    if not is_admin(user.id):
-        left = ROLE_COOLDOWN_SECONDS - (ts() - last_role)
-        if left > 0:
-            await send_result(update, context, f"⏳ {mention(user)}, подожди еще {left // 60} мин. {left % 60} сек.")
-            return
+    left = ROLE_COOLDOWN_SECONDS - (ts() - last_role)
+
+    if left > 0:
+        await send_result(
+            update,
+            context,
+            f"⏳ {mention(user)}, подожди еще {left // 60} мин. {left % 60} сек."
+        )
+        return
 
     phrase = random_phrase()
     if not phrase:
