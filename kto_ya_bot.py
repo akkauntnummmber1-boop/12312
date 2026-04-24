@@ -4,7 +4,7 @@ import logging
 import time
 import uuid
 import html
-import shutil
+import os
 from pathlib import Path
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -22,22 +22,16 @@ from telegram.ext import (
 BOT_TOKEN = "8442673427:AAEj15lEhVaxBFHUBw_EUYdJEV_-99_e6p4"
 ADMIN_IDS = {5037478748, 6991875}
 
-BASE_DIR = Path(__file__).resolve().parent
+# =========================
+# База данных
+# =========================
+# Сделано как в рабочем примере:
+# папка data создается рядом с запуском проекта, база лежит в data/bot.db
 
-# Основная база хранится в папке data.
-# На большинстве хостингов именно /app/data является постоянной папкой.
-DATA_DIR = BASE_DIR / "data"
-DB_PATH = DATA_DIR / "bot_database.db"
+DB_DIR = "data"
+DB_PATH = os.path.join(DB_DIR, "bot.db")
 
-# Копия для файлового менеджера хоста.
-# Она автоматически обновляется после изменений.
-VISIBLE_DB_PATH = BASE_DIR / "bot_database.db"
-
-DB_ALIASES = [
-    BASE_DIR / "database.db",
-    BASE_DIR / "database.sqlite",
-    BASE_DIR / "kto_ya.sqlite3",
-]
+os.makedirs(DB_DIR, exist_ok=True)
 TRIGGERS = {"кто я", "кто", "я"}
 
 ROLE_COOLDOWN_SECONDS = 10 * 60
@@ -96,23 +90,8 @@ def mention(user) -> str:
 
 
 def db():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return sqlite3.connect(str(DB_PATH))
-
-
-def sync_visible_db():
-    """
-    Копирует настоящую базу из /data в корень проекта.
-    Это нужно для панелей хостинга, которые показывают файлы только в /app.
-    """
-    try:
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        VISIBLE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-        if DB_PATH.exists():
-            shutil.copy2(DB_PATH, VISIBLE_DB_PATH)
-    except Exception as e:
-        logger.warning("Не удалось обновить видимую копию базы: %s", e)
+    os.makedirs(DB_DIR, exist_ok=True)
+    return sqlite3.connect(DB_PATH)
 
 
 def columns(conn, table: str) -> set[str]:
@@ -120,110 +99,90 @@ def columns(conn, table: str) -> set[str]:
 
 
 def init_db():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    os.makedirs(DB_DIR, exist_ok=True)
 
-    # Создаем основной файл базы заранее.
-    DB_PATH.touch(exist_ok=True)
+    conn = db()
+    cur = conn.cursor()
 
-    # Создаем видимую копию в /app.
-    VISIBLE_DB_PATH.touch(exist_ok=True)
+    cur.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
 
-    # Создаем дополнительные файлы с популярными именами/расширениями.
-    for alias_path in DB_ALIASES:
-        alias_path.parent.mkdir(parents=True, exist_ok=True)
-        alias_path.touch(exist_ok=True)
-
-    logger.info("Основная база данных: %s", DB_PATH.resolve())
-    logger.info("Видимая копия базы: %s", VISIBLE_DB_PATH.resolve())
-    logger.info("Дополнительные файлы базы: %s", ", ".join(str(p.resolve()) for p in DB_ALIASES))
-
-    with db() as conn:
-        conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS phrases (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                text TEXT NOT NULL UNIQUE,
-                created_at INTEGER NOT NULL
-            )
-            """
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS phrases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL UNIQUE,
+            created_at INTEGER NOT NULL
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                uid TEXT UNIQUE,
-                balance_milli INTEGER NOT NULL DEFAULT 0,
-                openings INTEGER NOT NULL DEFAULT 0,
-                last_role_at INTEGER NOT NULL DEFAULT 0,
-                hidden INTEGER NOT NULL DEFAULT 0,
-                created_at INTEGER NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS bonus_claims (
-                bonus_id TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                amount_milli INTEGER NOT NULL,
-                claimed INTEGER NOT NULL DEFAULT 0,
-                created_at INTEGER NOT NULL,
-                claimed_at INTEGER
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS groups (
-                chat_id INTEGER PRIMARY KEY,
-                title TEXT,
-                username TEXT,
-                type TEXT,
-                added_at INTEGER NOT NULL,
-                last_seen_at INTEGER NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS withdrawals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                wallet TEXT NOT NULL,
-                amount_milli INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                created_at INTEGER NOT NULL,
-                reviewed_by INTEGER,
-                reviewed_at INTEGER
-            )
-            """
-        )
+        """
+    )
 
-        user_cols = columns(conn, "users")
-        if "hidden" not in user_cols:
-            conn.execute("ALTER TABLE users ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            uid TEXT UNIQUE,
+            balance_milli INTEGER NOT NULL DEFAULT 0,
+            openings INTEGER NOT NULL DEFAULT 0,
+            last_role_at INTEGER NOT NULL DEFAULT 0,
+            hidden INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
+        )
+        """
+    )
 
-        conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('next_uid', '1')")
-        conn.commit()
-        sync_visible_db()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bonus_claims (
+            bonus_id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            amount_milli INTEGER NOT NULL,
+            claimed INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            claimed_at INTEGER
+        )
+        """
+    )
 
-    sync_visible_db()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS groups (
+            chat_id INTEGER PRIMARY KEY,
+            title TEXT,
+            username TEXT,
+            type TEXT,
+            added_at INTEGER NOT NULL,
+            last_seen_at INTEGER NOT NULL
+        )
+        """
+    )
 
-    # Пишем в alias-файлы минимальную SQLite-схему, чтобы панель точно распознала их как базы, а не пустые файлы.
-    for alias_path in DB_ALIASES:
-        try:
-            with sqlite3.connect(str(alias_path)) as alias_conn:
-                alias_conn.execute("CREATE TABLE IF NOT EXISTS info (name TEXT PRIMARY KEY, value TEXT)")
-                alias_conn.execute(
-                    "INSERT OR REPLACE INTO info (name, value) VALUES ('note', ?)",
-                    ("Основная база бота находится в bot_database.db",),
-                )
-                alias_conn.commit()
-        except Exception as e:
-            logger.warning("Не удалось создать alias-базу %s: %s", alias_path, e)
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS withdrawals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            wallet TEXT NOT NULL,
+            amount_milli INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at INTEGER NOT NULL,
+            reviewed_by INTEGER,
+            reviewed_at INTEGER
+        )
+        """
+    )
+
+    user_cols = table_columns(conn, "users")
+    if "hidden" not in user_cols:
+        cur.execute("ALTER TABLE users ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
+
+    cur.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('next_uid', '1')")
+
+    conn.commit()
+    conn.close()
+
+    logger.info("База данных создана/открыта: %s", os.path.abspath(DB_PATH))
 
 def next_uid(conn) -> str:
     row = conn.execute("SELECT value FROM meta WHERE key='next_uid'").fetchone()
@@ -252,7 +211,6 @@ def register_user(user):
                 (user.id, user.username, user.first_name, next_uid(conn), ts()),
             )
         conn.commit()
-        sync_visible_db()
 
 
 def remember_group(chat):
@@ -271,7 +229,6 @@ def remember_group(chat):
                 (chat.id, chat.title, chat.username, chat.type, ts(), ts()),
             )
         conn.commit()
-        sync_visible_db()
 
 
 def get_user(user_id: int):
@@ -293,8 +250,6 @@ def add_phrase_db(text: str) -> bool:
         try:
             conn.execute("INSERT INTO phrases (text, created_at) VALUES (?, ?)", (text, ts()))
             conn.commit()
-            sync_visible_db()
-        sync_visible_db()
             return True
         except sqlite3.IntegrityError:
             return False
@@ -322,7 +277,6 @@ def delete_phrase_db(pid: int) -> bool:
     with db() as conn:
         cur = conn.execute("DELETE FROM phrases WHERE id=?", (pid,))
         conn.commit()
-        sync_visible_db()
         return cur.rowcount > 0
 
 
@@ -330,7 +284,6 @@ def add_balance(user_id: int, amount: int):
     with db() as conn:
         conn.execute("UPDATE users SET balance_milli=balance_milli+? WHERE user_id=?", (amount, user_id))
         conn.commit()
-        sync_visible_db()
 
 
 def take_balance(user_id: int, amount: int) -> tuple[bool, str]:
@@ -343,7 +296,6 @@ def take_balance(user_id: int, amount: int) -> tuple[bool, str]:
             return False, f"У пользователя только {money(bal)}."
         conn.execute("UPDATE users SET balance_milli=balance_milli-? WHERE user_id=?", (amount, user_id))
         conn.commit()
-        sync_visible_db()
     return True, "Готово."
 
 
@@ -357,8 +309,6 @@ def set_uid(user_id: int, uid: str) -> tuple[bool, str]:
         try:
             conn.execute("UPDATE users SET uid=? WHERE user_id=?", (uid, user_id))
             conn.commit()
-            sync_visible_db()
-        sync_visible_db()
             return True, "UID изменен."
         except sqlite3.IntegrityError:
             return False, "Такой UID уже занят."
@@ -370,7 +320,6 @@ def hide_user(user_id: int) -> tuple[bool, str]:
             return False, "Пользователь не найден."
         conn.execute("UPDATE users SET hidden=1 WHERE user_id=?", (user_id,))
         conn.commit()
-        sync_visible_db()
     return True, "Пользователь скрыт."
 
 
@@ -378,7 +327,6 @@ def inc_opening(user_id: int):
     with db() as conn:
         conn.execute("UPDATE users SET openings=openings+1, last_role_at=? WHERE user_id=?", (ts(), user_id))
         conn.commit()
-        sync_visible_db()
 
 
 def create_bonus(user_id: int) -> str:
@@ -389,7 +337,6 @@ def create_bonus(user_id: int) -> str:
             (bonus_id, user_id, BONUS_AMOUNT_MILLI, ts()),
         )
         conn.commit()
-        sync_visible_db()
     return bonus_id
 
 
@@ -409,7 +356,6 @@ def claim_bonus(bonus_id: str, user_id: int) -> str:
         conn.execute("UPDATE bonus_claims SET claimed=1, claimed_at=? WHERE bonus_id=?", (ts(), bonus_id))
         conn.execute("UPDATE users SET balance_milli=balance_milli+? WHERE user_id=?", (amount, user_id))
         conn.commit()
-        sync_visible_db()
     return f"Вы получили {money(amount)}"
 
 
@@ -472,7 +418,6 @@ def create_withdrawal(user_id: int, wallet: str, amount: int) -> int:
             (user_id, wallet, amount, ts()),
         )
         conn.commit()
-        sync_visible_db()
         return cur.lastrowid
 
 
@@ -488,7 +433,6 @@ def set_withdrawal(wid: int, status: str, admin_id: int) -> bool:
             return False
         conn.execute("UPDATE withdrawals SET status=?, reviewed_by=?, reviewed_at=? WHERE id=?", (status, admin_id, ts(), wid))
         conn.commit()
-        sync_visible_db()
     return True
 
 
@@ -682,56 +626,33 @@ async def dbpath_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ У тебя нет доступа.")
         return
 
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    DB_PATH.touch(exist_ok=True)
+    os.makedirs(DB_DIR, exist_ok=True)
 
-    sync_visible_db()
-
-    aliases = "\n".join(
-        f"• <code>{html.escape(str(p.resolve()))}</code> — <b>{p.exists()}</b>"
-        for p in DB_ALIASES
+    # Проверочная запись, чтобы сразу понять, сохраняет ли база.
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS db_check (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL)"
     )
+    cur.execute("INSERT INTO db_check (created_at) VALUES (?)", (ts(),))
+    cur.execute("SELECT COUNT(*) FROM db_check")
+    count = cur.fetchone()[0]
+    conn.commit()
+    conn.close()
 
     await update.message.reply_text(
-        "🗄 Основная база, куда бот сохраняет данные:\n"
-        f"<code>{html.escape(str(DB_PATH.resolve()))}</code> — <b>{DB_PATH.exists()}</b>\n\n"
-        "👁 Видимая копия в файловом менеджере:\n"
-        f"<code>{html.escape(str(VISIBLE_DB_PATH.resolve()))}</code> — <b>{VISIBLE_DB_PATH.exists()}</b>\n\n"
-        "Дополнительные файлы для панели хоста:\n"
-        f"{aliases}",
+        "🗄 База данных:\n"
+        f"<code>{html.escape(os.path.abspath(DB_PATH))}</code>\n\n"
+        f"Файл существует: <b>{os.path.exists(DB_PATH)}</b>\n"
+        f"Проверочных записей: <b>{count}</b>",
         parse_mode="HTML",
     )
+
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Отменено.")
     return ConversationHandler.END
-
-
-async def checkdb_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("⛔ У тебя нет доступа.")
-        return
-
-    register_user(update.effective_user)
-
-    with db() as conn:
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS db_check (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL)"
-        )
-        conn.execute("INSERT INTO db_check (created_at) VALUES (?)", (ts(),))
-        count = conn.execute("SELECT COUNT(*) FROM db_check").fetchone()[0]
-        conn.commit()
-
-    sync_visible_db()
-
-    await update.message.reply_text(
-        "✅ Проверка записи в базу выполнена.\n"
-        f"Записей в таблице db_check: <b>{count}</b>\n\n"
-        f"Основная база: <code>{html.escape(str(DB_PATH.resolve()))}</code>\n"
-        f"Видимая копия: <code>{html.escape(str(VISIBLE_DB_PATH.resolve()))}</code>",
-        parse_mode="HTML",
-    )
 
 
 async def add_phrase_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1034,7 +955,6 @@ def main():
     app.add_handler(CommandHandler("profile", profile_cmd))
     app.add_handler(CommandHandler("top", top_cmd))
     app.add_handler(CommandHandler("dbpath", dbpath_cmd))
-    app.add_handler(CommandHandler("checkdb", checkdb_cmd))
 
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(add_phrase_start, pattern="^add_phrase$")],
