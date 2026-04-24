@@ -175,7 +175,7 @@ def init_db():
         """
     )
 
-    user_cols = table_columns(conn, "users")
+    user_cols = columns(conn, "users")
     if "hidden" not in user_cols:
         cur.execute("ALTER TABLE users ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
 
