@@ -21,8 +21,8 @@ from telegram.ext import (
 BOT_TOKEN = "8442673427:AAEj15lEhVaxBFHUBw_EUYdJEV_-99_e6p4"
 ADMIN_IDS = {5037478748, 6991875}
 
-BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "kto_ya.sqlite3"
+BASE_DIR = Path.cwd()
+DB_PATH = BASE_DIR / "bot_database.db"
 TRIGGERS = {"кто я", "кто", "я"}
 
 ROLE_COOLDOWN_SECONDS = 10 * 60
@@ -81,7 +81,8 @@ def mention(user) -> str:
 
 
 def db():
-    return sqlite3.connect(DB_PATH)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return sqlite3.connect(str(DB_PATH))
 
 
 def columns(conn, table: str) -> set[str]:
@@ -90,6 +91,8 @@ def columns(conn, table: str) -> set[str]:
 
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    DB_PATH.touch(exist_ok=True)
+    logger.info("Путь к базе данных: %s", DB_PATH.resolve())
 
     with db() as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -601,6 +604,22 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_result(update, context, top_text())
 
 
+async def dbpath_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ У тебя нет доступа.")
+        return
+
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    DB_PATH.touch(exist_ok=True)
+
+    await update.message.reply_text(
+        "🗄 База данных:\n"
+        f"<code>{html.escape(str(DB_PATH.resolve()))}</code>\n\n"
+        f"Файл существует: <b>{DB_PATH.exists()}</b>",
+        parse_mode="HTML",
+    )
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Отменено.")
     return ConversationHandler.END
@@ -905,6 +924,7 @@ def main():
     app.add_handler(CommandHandler("delete", delete_cmd))
     app.add_handler(CommandHandler("profile", profile_cmd))
     app.add_handler(CommandHandler("top", top_cmd))
+    app.add_handler(CommandHandler("dbpath", dbpath_cmd))
 
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(add_phrase_start, pattern="^add_phrase$")],
