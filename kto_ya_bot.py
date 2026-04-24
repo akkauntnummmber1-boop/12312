@@ -48,6 +48,8 @@ WAIT_TAKE_AMOUNT = 7
 WAIT_UID_USER = 8
 WAIT_UID_VALUE = 9
 WAIT_HIDE_USER = 10
+WAIT_SEARCH_USER = 11
+WAIT_UNHIDE_USER = 12
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -323,6 +325,42 @@ def hide_user(user_id: int) -> tuple[bool, str]:
     return True, "Пользователь скрыт."
 
 
+def unhide_user(user_id: int) -> tuple[bool, str]:
+    with db() as conn:
+        if not conn.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,)).fetchone():
+            return False, "Пользователь не найден."
+        conn.execute("UPDATE users SET hidden=0 WHERE user_id=?", (user_id,))
+        conn.commit()
+    return True, "Пользователь раскрыт."
+
+
+def search_user_text(user_id: int) -> str | None:
+    row = get_user(user_id)
+
+    if not row:
+        return None
+
+    user_id, username, first_name, uid, balance, openings, last_role, hidden = row
+
+    # Если человек скрыт, поиск делает вид, что его нет в боте.
+    if hidden:
+        return None
+
+    username_text = f"@{username}" if username else "нет"
+    first_name_text = first_name or "нет"
+
+    return (
+        "🔎 <b>Пользователь найден</b>\n\n"
+        f"🆔 Telegram ID: <code>{user_id}</code>\n"
+        f"🔖 UID: <code>{html.escape(str(uid))}</code>\n"
+        f"💰 Баланс: <b>{money(balance)}</b>\n"
+        f"👁 Открытия: <b>{openings}</b>\n"
+        f"📛 Username: {html.escape(username_text)}\n"
+        f"👤 Имя: {html.escape(first_name_text)}\n"
+        "🚫 Статус бана: <b>не забанен</b>"
+    )
+
+
 def inc_opening(user_id: int):
     with db() as conn:
         conn.execute("UPDATE users SET openings=openings+1, last_role_at=? WHERE user_id=?", (ts(), user_id))
@@ -467,7 +505,9 @@ def admin_menu():
         [InlineKeyboardButton("💰 Выдать USDT", callback_data="give_usdt")],
         [InlineKeyboardButton("➖ Забрать USDT", callback_data="take_usdt")],
         [InlineKeyboardButton("🆔 Выдать кастом UID", callback_data="custom_uid")],
+        [InlineKeyboardButton("🔎 Поиск по ID", callback_data="search_user")],
         [InlineKeyboardButton("🙈 Скрыть пользователя", callback_data="hide_user")],
+        [InlineKeyboardButton("👁 Раскрыть пользователя", callback_data="unhide_user")],
         [InlineKeyboardButton("👥 Группы с ботом", callback_data="groups")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="back")],
     ])
@@ -871,6 +911,61 @@ async def hide_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+async def unhide_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("⛔ У тебя нет доступа.")
+        return ConversationHandler.END
+    await q.message.reply_text("👁 Введите Telegram ID пользователя, которого нужно раскрыть:")
+    return WAIT_UNHIDE_USER
+
+
+async def unhide_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ У тебя нет доступа.")
+        return ConversationHandler.END
+
+    if not update.message.text.strip().isdigit():
+        await update.message.reply_text("Введите Telegram ID числом.")
+        return WAIT_UNHIDE_USER
+
+    target = int(update.message.text.strip())
+    ok, msg = unhide_user(target)
+    await update.message.reply_text(f"{'✅' if ok else '⚠️'} {msg}")
+    return ConversationHandler.END
+
+
+async def search_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("⛔ У тебя нет доступа.")
+        return ConversationHandler.END
+    await q.message.reply_text("🔎 Введите Telegram ID пользователя для поиска:")
+    return WAIT_SEARCH_USER
+
+
+async def search_user_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ У тебя нет доступа.")
+        return ConversationHandler.END
+
+    if not update.message.text.strip().isdigit():
+        await update.message.reply_text("Введите Telegram ID числом.")
+        return WAIT_SEARCH_USER
+
+    target = int(update.message.text.strip())
+    result = search_user_text(target)
+
+    if result is None:
+        await update.message.reply_text("❌ Такого человека нет в боте.")
+    else:
+        await update.message.reply_text(result, parse_mode="HTML")
+
+    return ConversationHandler.END
+
+
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     data = q.data
@@ -996,6 +1091,18 @@ def main():
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(hide_start, pattern="^hide_user$")],
         states={WAIT_HIDE_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, hide_finish)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    ))
+
+    app.add_handler(ConversationHandler(
+        entry_points=[CallbackQueryHandler(unhide_start, pattern="^unhide_user$")],
+        states={WAIT_UNHIDE_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, unhide_finish)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    ))
+
+    app.add_handler(ConversationHandler(
+        entry_points=[CallbackQueryHandler(search_user_start, pattern="^search_user$")],
+        states={WAIT_SEARCH_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_user_finish)]},
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
 
