@@ -21,8 +21,13 @@ from telegram.ext import (
 BOT_TOKEN = "8442673427:AAEj15lEhVaxBFHUBw_EUYdJEV_-99_e6p4"
 ADMIN_IDS = {5037478748, 6991875}
 
-BASE_DIR = Path.cwd()
+BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "bot_database.db"
+DB_ALIASES = [
+    BASE_DIR / "database.db",
+    BASE_DIR / "database.sqlite",
+    BASE_DIR / "kto_ya.sqlite3",
+]
 TRIGGERS = {"кто я", "кто", "я"}
 
 ROLE_COOLDOWN_SECONDS = 10 * 60
@@ -91,8 +96,18 @@ def columns(conn, table: str) -> set[str]:
 
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    # Создаем основной файл базы заранее, чтобы хостинг видел его сразу после запуска.
     DB_PATH.touch(exist_ok=True)
-    logger.info("Путь к базе данных: %s", DB_PATH.resolve())
+
+    # Создаем дополнительные файлы с популярными именами/расширениями.
+    # Некоторые панели хостинга показывают только .db или только .sqlite.
+    for alias_path in DB_ALIASES:
+        alias_path.parent.mkdir(parents=True, exist_ok=True)
+        alias_path.touch(exist_ok=True)
+
+    logger.info("Основная база данных: %s", DB_PATH.resolve())
+    logger.info("Дополнительные файлы базы: %s", ", ".join(str(p.resolve()) for p in DB_ALIASES))
 
     with db() as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -166,6 +181,18 @@ def init_db():
         conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('next_uid', '1')")
         conn.commit()
 
+    # Пишем в alias-файлы минимальную SQLite-схему, чтобы панель точно распознала их как базы, а не пустые файлы.
+    for alias_path in DB_ALIASES:
+        try:
+            with sqlite3.connect(str(alias_path)) as alias_conn:
+                alias_conn.execute("CREATE TABLE IF NOT EXISTS info (name TEXT PRIMARY KEY, value TEXT)")
+                alias_conn.execute(
+                    "INSERT OR REPLACE INTO info (name, value) VALUES ('note', ?)",
+                    ("Основная база бота находится в bot_database.db",),
+                )
+                alias_conn.commit()
+        except Exception as e:
+            logger.warning("Не удалось создать alias-базу %s: %s", alias_path, e)
 
 def next_uid(conn) -> str:
     row = conn.execute("SELECT value FROM meta WHERE key='next_uid'").fetchone()
@@ -612,10 +639,16 @@ async def dbpath_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     DB_PATH.touch(exist_ok=True)
 
+    aliases = "\n".join(
+        f"• <code>{html.escape(str(p.resolve()))}</code> — <b>{p.exists()}</b>"
+        for p in DB_ALIASES
+    )
+
     await update.message.reply_text(
-        "🗄 База данных:\n"
-        f"<code>{html.escape(str(DB_PATH.resolve()))}</code>\n\n"
-        f"Файл существует: <b>{DB_PATH.exists()}</b>",
+        "🗄 Основная база данных:\n"
+        f"<code>{html.escape(str(DB_PATH.resolve()))}</code> — <b>{DB_PATH.exists()}</b>\n\n"
+        "Дополнительные файлы для панели хоста:\n"
+        f"{aliases}",
         parse_mode="HTML",
     )
 
